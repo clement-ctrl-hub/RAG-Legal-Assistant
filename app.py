@@ -46,5 +46,11 @@ if question:
 
     # afficher les articles utilisés
     with st.expander("📜 Articles du Code pénal utilisés"):
-        for doc in docs[:2]:   # limiter à 2 articles pour la rapidité
-            st.write(doc)
+        for doc in docs[:5]:   # limiter à 2 articles pour la rapidité
+            st.success(
+            f"Pertinence : {doc['score']} %"
+        )
+
+        st.write(
+            doc["article"]
+        )

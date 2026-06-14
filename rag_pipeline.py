@@ -1,47 +1,72 @@
+# Chargement des clés API
+from openai import OpenAI
+from dotenv import load_dotenv
+import os
+import numpy as np
+load_dotenv()
+
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY")
+)
+
+
 import json
 import faiss
-import requests
-from sentence_transformers import SentenceTransformer
 # charger les données
 with open("data/articles.json", "r", encoding="utf-8") as f:
     articles = json.load(f)
 
-# charger embeddings
-model = SentenceTransformer("all-MiniLM-L6-v2")
-
-# charger index FAISS
+# charger index FAISS de l'embedding et du score de similarité
 index = faiss.read_index("vector_db/code_penal.index")
 
-def retrieve_articles(query, k=1):
+def retrieve_articles(query, k=8):
 
-    query_embedding = model.encode([query])
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=query
+    )
+
+    query_embedding = np.array(
+        [response.data[0].embedding],
+        dtype="float32"
+    )
 
     D, I = index.search(query_embedding, k)
 
-    docs = [articles[i] for i in I[0]]
+    results = []
 
-    #docs = [articles[i][0] for i in I[0]]
+    for idx, distance in zip(I[0], D[0]):
 
-    return docs
+        score = round(
+            (1 / (1 + float(distance))) * 100,
+            1
+        )
+
+        results.append({
+            "article": articles[idx],
+            "distance": float(distance),
+            "score": score
+        })
+
+    return results
 
 
 def rag_pipeline(question):
 
     docs = retrieve_articles(question)
 
-    context = "\n\n".join(docs)
+    context = "\n\n".join([doc["article"] for doc in docs])
 
     prompt = f"""
 Tu es un assistant juridique spécialisé dans le droit togolais.
-Réponds uniquement à partir des articles fournis.
-Ta réponse doit commencer par :
-"Selon l'article X du Code pénal togolais..."
-Règles importantes :
-cite uniquement les articles présents dans les sources
-Ne cite pas d'autres articles
-Si l'information n'est pas dans les articles, dis que tu ne sais pas.
 
-Articles :
+Règles :
+- Réponds uniquement à partir des articles fournis
+- Si la question est générale et les articles sont spécifiques, précise-le
+- Ne généralise jamais un cas particulier
+- Si tu n'es pas sûr, dis que la réponse dépend du cas
+
+Articles du code pénal togolais :
 {context}
 
 Question :
@@ -49,18 +74,27 @@ Question :
 
 Réponse :
 """
-#appel Ollama
-    response = requests.post(
-        "http://localhost:11434/api/generate",
-        json={
-            "model": "llama3",
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "num_predict": 120 #200, 300 pour un grand model (plus de contexte)
-            }
-        }
-    )
 
-    answer = response.json()["response"]
+    try:
+
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Tu es un juriste spécialisé dans le droit togolais."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.2
+        )
+
+        answer = response.choices[0].message.content
+
+    except Exception as e:
+        answer = f"⚠️ Erreur OpenAI : {str(e)}"
+
     return answer, docs
